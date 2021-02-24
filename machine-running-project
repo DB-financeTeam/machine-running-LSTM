@@ -1,0 +1,188 @@
+import math
+import pandas as pd
+import numpy as np
+import keras
+import tensorflow as tf
+from keras.layers import LSTM, Dropout, Dense, Activation, Bidirectional, TimeDistributed
+from tensorflow.keras.callbacks import ModelCheckpoint
+import matplotlib.pyplot as plt
+from keras.models import Sequential
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import accuracy_score
+
+
+
+
+
+# split a multivariate sequence into samples
+def split_sequence(sequence, n_steps_in, n_steps_out):
+    X, y = list(), list()
+    for i in range(len(sequence)):
+
+        end_ix = i + n_steps_in
+        out_end_ix = end_ix + n_steps_out
+        if out_end_ix > len(sequence):
+            break
+
+        seq_x, seq_y = sequence[i:end_ix], sequence[end_ix:out_end_ix]
+        X.append(seq_x)
+        y.append(seq_y)
+    return np.array(X), np.array(y)
+
+
+def return_list(x_list, change_array):
+    for i in change_array:
+        em_list = []
+        for k in i:
+            em_list.append(k)
+        x_list.append(em_list)
+    return np.array(x_list)
+
+
+def first_list(list, new_list):
+    for i in list:
+        for k in i:
+            new_list.append(k[0])
+
+    return new_list
+
+
+df = pd.read_csv("total_asset.csv", encoding='cp949') #재무제표가 담겨져 있는 엑셀파일
+eval_list=[] # 전종목의 테스트데이터를 넣어줄 리스트
+name_list=[] # 종목 코드를 넣어줄 리스트
+for i in df["Symbol"]:
+    if len(str(i)) != 6:
+        i = "0" * (6 - len(str(i))) + str(i)
+        name_list.append(i)
+    else:
+        name_list.append(str(i))
+print(name_list) # 종목코드를 리스트로 담아온다.
+############################################
+
+for name in name_list:
+    scaler = MinMaxScaler(feature_range=(0, 1))  # 0~1까지 정규화 해주는 함수
+    df = pd.read_excel("com.xlsx", sheet_name=f"{name}") #com이라는 엑셀파일에 주가데이터가 담겨있다.
+
+    df=df.iloc[2:,2]
+    print(df)
+    df = df.astype('float32')
+
+    ######################
+    data_num = int(len(df)*0.9)+1 # -> 이데이터숫자를 바꿔주면, 훈련 데이터 개수를 조절할 수 있음! 다른거는 안바꿔도 돼. 이것만 바꾸면 자동으로 적용돼.
+
+    ####################
+    dataset_train = np.array(df.iloc[:data_num,])
+
+
+    dataset_train = np.reshape(dataset_train, (-1, 1))
+    dataset_train = scaler.fit_transform(dataset_train)  # 정규화해주는것!
+    ##############################
+
+
+    dataset_test = np.array(df.iloc[data_num:,])
+    minimum = dataset_test.min() #역 정규화 과정을 위해 변수를 미리 설정하였다.
+    maximum = dataset_test.max()
+    dataset_test = np.reshape(dataset_test, (-1, 1))
+    dataset_test = scaler.fit_transform(dataset_test)
+
+    n_steps_in, n_steps_out = 4, 1  # 함수를 통해 인풋데이터와 아웃풋 데이터를 조절할 수 있다.
+    x_train, y_train = split_sequence(dataset_train, n_steps_in, n_steps_out)
+
+    x_test, y_test = split_sequence(dataset_test, n_steps_in, n_steps_out)
+
+    # print(x_train[0],y_train[0])
+
+    model = Sequential()
+    model.add(LSTM(20, input_shape=(n_steps_in, 1),activation="linear", return_sequences=True))
+
+    model.add(LSTM(10, activation="linear", return_sequences=False))
+
+
+    model.add(Dense(units=1))
+
+    model.compile(loss='mse', optimizer='RMSprop')
+
+    print(model.summary())
+
+    checkpoint_path = 'model_checkpoin.ckpt'
+    checkpoint = ModelCheckpoint(checkpoint_path, save_weights_only=True, save_best_only=True, monitor='val loss',
+                                 verbose=2)
+
+    history = model.fit(x_train, y_train, batch_size=50, epochs=50, verbose=2,
+                        callbacks=[checkpoint],validation_split=0.1)
+
+    pred = model.predict(x_test,batch_size=1)
+    eval_list.append(model.evaluate(x_test, y_test))
+    pred = pred.tolist() # 예측치를 리스트로 변경해주는 함수이다.
+
+    ################# 변수들 만드는 장소
+    y_hat = []  # 테스트 y예측값
+    real_y = []  # 테스트 y예측값을 리스트로 넣어줄 곳
+
+    ##################
+
+    y_test = y_test.tolist()  # y 테스트 실제값을 바꿔준다.
+
+    y_hat = return_list(y_hat, pred)
+    real_y = first_list(y_test, real_y)
+    last_real_y = []
+    last_real_y = first_list(last_real_y, real_y)
+
+
+
+
+##################################### x_test 마지막 부분에 예측치를 넣고 가장 오래된거를 밀어내는 과정
+    pre_list = x_test[-1]
+
+    pre_list=pre_list[1:,]
+
+    last_y=np.array(y_test[-1])
+
+    pre_list=np.append(pre_list,last_y,axis=0)
+
+########################## y값을 리스트에 넣어주는 과정
+
+    last_pre_list = []
+
+
+
+
+
+    predict_y = []
+
+    for i in y_hat:
+        predict_y.append(i[0])
+
+##############################
+
+    for i in range(5): # 이 숫자를 변경하면 예측치의 개수가 바뀐다. 새로운 예측치들을 pre_list에 담아준다.
+
+        pre_list = pre_list.reshape((-1, n_steps_in, 1))
+
+
+        f_pred = model.predict(pre_list)
+        f_pred = f_pred.tolist()
+        last_pre_list.append(f_pred[0])
+        pre_list = pre_list.tolist()
+        pre_list = pre_list[0]
+
+        del pre_list[0]
+        pre_list.append(f_pred[0])
+        predict_y.append(f_pred[0][0])
+        pre_list=np.array(pre_list)
+        # 이후 plt를 이용하여 그래프의 예측값을 확인할 수 있다.
+
+
+eval_df = pd.DataFrame(eval_list) #표준오차값을 기업별로 담는 코드이다.
+print(eval_df)
+
+df2 = pd.read_excel('model_comparing.xlsx') #모델의 기업별 표준오차 값을 엑셀파일에 넣어준다.
+df2['model1'] = eval_df
+print(df2)
+
+writer = pd.ExcelWriter('model_comparing.xlsx')
+df2.to_excel(writer)
+writer.close()
+
+
